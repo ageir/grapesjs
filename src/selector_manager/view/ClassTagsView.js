@@ -57,7 +57,11 @@ module.exports = Backbone.View.extend({
       'styleManager:update',
       this.componentChanged
     );
-    this.listenTo(this.target, 'component:toggled', this.componentChanged);
+    this.listenTo(
+      this.target,
+      'component:toggled component:update:classes',
+      this.componentChanged
+    );
     this.listenTo(this.target, 'component:update:classes', this.updateSelector);
 
     this.listenTo(this.collection, 'add', this.addNew);
@@ -146,6 +150,7 @@ module.exports = Backbone.View.extend({
    * @private
    */
   componentChanged(target) {
+    target = target || this.getTarget();
     this.compTarget = target;
     let validSelectors = [];
 
@@ -269,16 +274,10 @@ module.exports = Backbone.View.extend({
    * @private
    */
   renderClasses() {
-    var fragment = document.createDocumentFragment();
-
-    this.collection.each(function(model) {
-      this.addToClasses(model, fragment);
-    }, this);
-
-    if (this.getClasses())
-      this.getClasses()
-        .empty()
-        .append(fragment);
+    const frag = document.createDocumentFragment();
+    const classes = this.getClasses();
+    this.collection.each(model => this.addToClasses(model, frag));
+    classes.get(0) && classes.empty().append(frag);
 
     return this;
   },
@@ -289,8 +288,7 @@ module.exports = Backbone.View.extend({
    * @private
    */
   getClasses() {
-    if (!this.$classes)
-      this.$classes = this.$el.find('#' + this.pfx + 'tags-c');
+    if (!this.$classes) this.$classes = this.$el.find(`#${this.pfx}tags-c`);
     return this.$classes;
   },
 

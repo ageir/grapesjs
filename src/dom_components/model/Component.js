@@ -153,14 +153,13 @@ const Component = Backbone.Model.extend(Styleable).extend(
       this.config = opt.config || {};
       this.ccid = Component.createId(this);
       this.set('attributes', this.get('attributes') || {});
-      this.listenTo(this, 'change:script', this.scriptUpdated);
-      this.listenTo(this, 'change:traits', this.traitsUpdated);
-      this.listenTo(this, 'change:tagName', this.tagUpdated);
-      this.listenTo(this, 'change:attributes', this.attrUpdated);
       this.initClasses();
-      this.loadTraits();
+      this.initTraits();
       this.initComponents();
       this.initToolbar();
+      this.listenTo(this, 'change:script', this.scriptUpdated);
+      this.listenTo(this, 'change:tagName', this.tagUpdated);
+      this.listenTo(this, 'change:attributes', this.attrUpdated);
       this.set('status', '');
 
       // Register global updates for collection properties
@@ -251,10 +250,7 @@ const Component = Backbone.Model.extend(Styleable).extend(
      * @private
      */
     attrUpdated() {
-      const attrPrev = { ...this.previous('attributes') };
-      const attrCurrent = { ...this.get('attributes') };
-      const diff = shallowDiff(attrPrev, attrCurrent);
-      keys(diff).forEach(pr => this.trigger(`change:attributes:${pr}`));
+      this.setAttributes(this.get('attributes'), { silent: 1 });
     },
 
     /**
@@ -264,7 +260,7 @@ const Component = Backbone.Model.extend(Styleable).extend(
      * @example
      * component.setAttributes({ id: 'test', 'data-key': 'value' });
      */
-    setAttributes(attrs) {
+    setAttributes(attrs, opts = {}) {
       attrs = { ...attrs };
 
       // Handle classes
@@ -277,7 +273,10 @@ const Component = Backbone.Model.extend(Styleable).extend(
       style && this.setStyle(style);
       delete attrs.style;
 
-      this.set('attributes', attrs);
+      this.set('attributes', attrs, opts);
+      const attrPrev = { ...this.previous('attributes') };
+      const diff = shallowDiff(attrPrev, attrs);
+      keys(diff).forEach(pr => this.trigger(`change:attributes:${pr}`));
 
       return this;
     },
@@ -326,8 +325,9 @@ const Component = Backbone.Model.extend(Styleable).extend(
      */
     setStyle(prop = {}, opts = {}) {
       const em = this.em;
+      const { opt } = this;
 
-      if (em && em.getConfig('avoidInlineStyle')) {
+      if (em && em.getConfig('avoidInlineStyle') && !opt.temporary) {
         prop = isString(prop) ? this.parseStyle(prop) : prop;
         prop = { ...prop, ...this.get('style') };
         const state = this.get('state');
@@ -356,7 +356,9 @@ const Component = Backbone.Model.extend(Styleable).extend(
       const id = this.getId();
 
       // Add classes
-      this.get('classes').each(cls => classes.push(cls.get('name')));
+      this.get('classes').forEach(cls =>
+        classes.push(isString(cls) ? cls : cls.get('name'))
+      );
       classes.length && (attributes.class = classes.join(' '));
 
       // Check if we need an ID on the component
@@ -436,19 +438,60 @@ const Component = Backbone.Model.extend(Styleable).extend(
       return removed;
     },
 
+    /**
+     * Returns component's classes as an array of strings
+     * @return {Array}
+     */
+    getClasses() {
+      const attr = this.getAttributes();
+      const classStr = attr.class;
+      return classStr ? classStr.split(' ') : [];
+    },
+
     initClasses() {
+      const event = 'change:classes';
+      const toListen = [this, event, this.initClasses];
+      this.stopListening(...toListen);
       const classes = this.normalizeClasses(this.get('classes') || []);
-      this.set('classes', new Selectors(classes));
+      const selectors = new Selectors([]);
+      this.set('classes', selectors);
+      selectors.add(classes);
+      this.listenTo(...toListen);
       return this;
     },
 
     initComponents() {
+      const event = 'change:components';
+      const toListen = [this, event, this.initComponents];
+      this.stopListening(...toListen);
       // Have to add components after the init, otherwise the parent
       // is not visible
       const comps = new Components(null, this.opt);
       comps.parent = this;
-      !this.opt.avoidChildren && comps.reset(this.get('components'));
+      const components = this.get('components');
+      const addChild = !this.opt.avoidChildren;
       this.set('components', comps);
+      addChild && comps.add(components);
+      this.listenTo(...toListen);
+      return this;
+    },
+
+    initTraits() {
+      const event = 'change:traits';
+      const toListen = [this, event, this.initTraits];
+      this.stopListening(...toListen);
+      this.loadTraits();
+      const attrs = { ...this.get('attributes') };
+      const traits = this.get('traits');
+      traits.each(trait => {
+        if (!trait.get('changeProp')) {
+          const name = trait.get('name');
+          const value = trait.getInitValue();
+          if (name && value) attrs[name] = value;
+        }
+      });
+      traits.length && this.set('attributes', attrs);
+      this.listenTo(...toListen);
       return this;
     },
 
@@ -518,34 +561,6 @@ const Component = Backbone.Model.extend(Styleable).extend(
     },
 
     /**
-     * Once traits are updated I have to populates model's attributes
-     * @private
-     */
-    traitsUpdated() {
-      let found = 0;
-      const attrs = { ...this.get('attributes') };
-      const traits = this.get('traits');
-
-      if (!(traits instanceof Traits)) {
-        this.loadTraits();
-        return;
-      }
-
-      traits.each(trait => {
-        found = 1;
-        if (!trait.get('changeProp')) {
-          const name = trait.get('name');
-          const value = trait.getInitValue();
-          if (name && value) {
-            attrs[name] = value;
-          }
-        }
-      });
-
-      found && this.set('attributes', attrs);
-    },
-
-    /**
      * Init toolbar
      * @private
      */
@@ -594,16 +609,20 @@ const Component = Backbone.Model.extend(Styleable).extend(
      * @private
      */
     loadTraits(traits, opts = {}) {
-      var trt = new Traits([], this.opt);
-      trt.setTarget(this);
       traits = traits || this.get('traits');
 
-      if (traits.length) {
-        traits.forEach(tr => tr.attributes && delete tr.attributes.value);
-        trt.add(traits);
+      if (!(traits instanceof Traits)) {
+        const trt = new Traits([], this.opt);
+        trt.setTarget(this);
+
+        if (traits.length) {
+          traits.forEach(tr => tr.attributes && delete tr.attributes.value);
+          trt.add(traits);
+        }
+
+        this.set('traits', trt, opts);
       }
 
-      this.set('traits', trt, opts);
       return this;
     },
 

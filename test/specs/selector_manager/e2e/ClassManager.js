@@ -105,7 +105,7 @@ module.exports = {
             .getClasses()
             .find('.tag #close')
             .trigger('click');
-          expect(model.get('classes').length).toEqual(0);
+          setTimeout(() => expect(model.get('classes').length).toEqual(0));
         });
 
         test('Trigger correctly event on target with new class add', () => {
